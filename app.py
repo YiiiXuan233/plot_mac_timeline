@@ -90,7 +90,7 @@ def load_all_boards(tz="Asia/Taipei"):
 # 3. Streamlit 網頁介面
 # ═══════════════════════════════════════════════════════
 st.set_page_config(page_title="ESP32 多板實時追蹤", layout="wide")
-st.title("📡 ESP32 多板 MAC 時間軸追蹤")
+st.title("多板時間軸追蹤")
 
 long_df, active_boards = load_all_boards()
 
