@@ -8,7 +8,6 @@ from matplotlib.lines import Line2D
 # ═══════════════════════════════════════════════════════
 # 1. 設定你的 Google Sheets CSV 網址
 # ═══════════════════════════════════════════════════════
-# 請將這裡替換成你 4 塊板子發布為 CSV 的連結
 SHEET_URLS = {
     "Board_A": "https://docs.google.com/spreadsheets/d/1viaEU8TiREaTKlSUQuXC28ZT-KS-lv8FQn9JDlYsQpo/export?format=csv",
     "Board_B": "https://docs.google.com/spreadsheets/d/1T8dUEpCaVoXjv6QsS3J6sC3E76i0MjWt4FnpD54eRFM/export?format=csv",
@@ -17,7 +16,7 @@ SHEET_URLS = {
 }
 
 # ═══════════════════════════════════════════════════════
-# 2. 原有函式保留區 (直接沿用 plot_mac_timeline_multiboard.py)
+# 2. 原有函式保留區
 # ═══════════════════════════════════════════════════════
 TYPE_COLOR = {"B": "#8a6fd6", "P": "#eb6834", "D": "#2a9d5c", "O": "#c9a600"}
 TYPE_COLOR_DEFAULT = "#999999"
@@ -44,7 +43,7 @@ def parse_macs(s):
         out.append((mac.upper(), ch, rssi_val, typ.upper()))
     return out
 
-@st.cache_data(ttl=10)  # 快取 10 秒，避免每次調動滑桿都重新下載 CSV
+@st.cache_data(ttl=10)
 def load_all_boards(tz="Asia/Taipei"):
     long_dfs = []
     board_names = []
@@ -93,8 +92,22 @@ def load_all_boards(tz="Asia/Taipei"):
 st.set_page_config(page_title="ESP32 多板實時追蹤", layout="wide")
 st.title("📡 ESP32 多板 MAC 時間軸追蹤")
 
-# 側邊欄：取代原本的 argparse
+long_df, active_boards = load_all_boards()
+
+if long_df is None or long_df.empty:
+    st.error("沒有讀取到任何有效資料，請檢查 Google Sheets 連結。")
+    st.stop()
+
+# 側邊欄過濾參數設定
 st.sidebar.header("過濾參數設定")
+
+# 新增：讓使用者勾選必須同時收到的板子，預設全選
+selected_boards = st.sidebar.multiselect(
+    "選擇必須同時收到的板子 (最少勾一塊)",
+    options=active_boards,
+    default=active_boards
+)
+
 window_sec = st.sidebar.number_input("時間對齊桶寬 (--window)", min_value=1, max_value=60, value=5)
 min_count = st.sidebar.number_input("最少出現次數 (--min-count)", min_value=1, max_value=100, value=1)
 top_n = st.sidebar.number_input("顯示前 N 個裝置 (0=全部)", min_value=0, max_value=200, value=0)
@@ -105,16 +118,19 @@ if st.button("🔄 重新載入最新資料"):
     st.cache_data.clear()
     st.rerun()
 
-long_df, active_boards = load_all_boards()
-
-if long_df is None or long_df.empty:
-    st.error("沒有讀取到任何有效資料，請檢查 Google Sheets 連結。")
-    st.stop()
-
 st.write(f"✅ 成功讀取 **{len(active_boards)}** 塊板子: {', '.join(active_boards)}")
 
-# 過濾邏輯
+# 防呆機制：確保至少勾選了一塊板子
+if not selected_boards:
+    st.warning("請在側邊欄至少選擇一塊板子！")
+    st.stop()
+
+# 基本過濾邏輯
 filtered_df = long_df.copy()
+
+# 只保留使用者勾選的板子資料
+filtered_df = filtered_df[filtered_df["board"].isin(selected_boards)]
+
 if pkt_type != "全部":
     filtered_df = filtered_df[filtered_df["type"] == pkt_type]
 if rssi_min > -100:
@@ -125,16 +141,16 @@ if filtered_df.empty:
     st.warning("套用過濾條件後沒有任何資料剩下。")
     st.stop()
 
-# 時間切桶與多板交集 (保留源碼核心邏輯)
+# 時間切桶與多板交集
 filtered_df["bucket"] = filtered_df["datetime"].dt.floor(f"{window_sec}s")
 board_count = filtered_df.groupby(["bucket", "mac"])["board"].nunique().reset_index(name="n_boards")
 
-# 只留下全部板子都收到的 MAC
-n_boards_total = len(active_boards)
-full_coverage = board_count[board_count["n_boards"] == n_boards_total]
+# 動態判斷：只留下「有被勾選的板子」全部同時收到的 MAC
+n_required = len(selected_boards)
+full_coverage = board_count[board_count["n_boards"] == n_required]
 
 if full_coverage.empty:
-    st.warning(f"沒有任何 MAC 同時被全部 {n_boards_total} 塊板子收到。可考慮加大時間桶寬。")
+    st.warning(f"沒有任何 MAC 同時被勾選的 {n_required} 塊板子收到。可考慮加大時間桶寬。")
     st.stop()
 
 keep_keys = set(zip(full_coverage["bucket"], full_coverage["mac"]))
@@ -154,7 +170,7 @@ macs.sort(key=lambda x: x[1][0][0])
 
 n_macs = len(macs)
 if n_macs == 0:
-    st.warning(f"套用 min-count 後沒有裝置符合。")
+    st.warning("套用 min-count 後沒有裝置符合。")
     st.stop()
 
 # ═══════════════════════════════════════════════════════
